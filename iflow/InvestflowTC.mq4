@@ -10,37 +10,40 @@
 
 #include <stdlib.mqh> 
 
-// РІС…РѕРґРЅС‹Рµ РїР°СЂР°РјРµС‚СЂС‹:
-input string login = "AndreyB"; // РёРјСЏ СѓС‡Р°СЃС‚РЅРёРєР° РґР»СЏ РєРѕРїРёСЂРѕРІР°РЅРёСЏ
-input double lots = 0.1; // РѕР±СЉС‘Рј СЃРґРµР»РєРё (Р»РѕС‚РЅРѕСЃС‚СЊ)
-input int defaultStopPoints = 50; // СЂР°Р·РјРµСЂ СЃС‚РѕРїР°, РІ СЃР»СѓС‡Р°Рµ РµСЃР»Рё РµРіРѕ РЅРµ РІС‹СЃС‚Р°РІРёР» С‚СЂРµР№РґРµСЂ.
-input int slippage = 0; // РїР°СЂР°РјРµС‚СЂ slippage РїСЂРё РѕС‚РєСЂС‹С‚РёРё РѕСЂРґРµСЂРѕРІ
+// входные параметры:
+input string usersInput = "AndreyB"; // имена участников для копирования через запятую
+input double lots = 0.1; // объём сделки (лотность)
+input int defaultStopPoints = 50; // размер стопа, в случае если его не выставил трейдер.
+input int slippage = 0; // параметр slippage при открытии ордеров
    
-// РљРѕРґ РёРЅСЃС‚СЂСѓРјРµРЅС‚Р° РѕС‚ Investflow: EURUSD, GBPUSD, USDJPY, USDRUB, XAUUSD, BRENT
+// Код инструмента от Investflow: EURUSD, GBPUSD, USDJPY, USDRUB, XAUUSD, BRENT
 string iflowInstrument = "";
 
-// РљРѕРЅСЃС‚Р°РЅС‚Р° РґР»СЏ РїРµСЂРµРІРѕРґР° Investflow points РІ РґРµР»СЊС‚Сѓ РґР»СЏ С†РµРЅС‹
+// Константа для перевода Investflow points в дельту для цены
 double pointsToPriceMultiplier = 0;
 
+string users[];
+
 int OnInit() {
-    if (StringLen(login) == 0) {
-        Print("РќРµ СѓРєР°Р·Р°РЅ Р»РѕРіРёРЅ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ!");
+    if (StringLen(usersInput) == 0 || StringSplit(usersInput, ',', users) == 0) {
+        Print("Не указан логин пользователя!");
         return INIT_PARAMETERS_INCORRECT;
     }
     if (lots <= 0 || lots > 10) {
-        Print("РќРµРґРѕРїСѓСЃС‚РёРјР°СЏ Р»РѕС‚РЅРѕСЃС‚СЊ СЃРґРµР»РєРё!");
+        Print("Недопустимая лотность сделки!");
         return INIT_PARAMETERS_INCORRECT;
     }
     iflowInstrument = symbolToIflowInstrument();
     if (StringLen(iflowInstrument) == 0) {
-        Print("РРЅСЃС‚СЂСѓРјРµРЅС‚ РЅРµ СѓС‡Р°СЃС‚РІСѓРµС‚ РІ РєРѕРЅРєСѓСЂСЃРµ: ", Symbol());
+        Print("Инструмент не участвует в конкурсе: ", Symbol());
         return INIT_PARAMETERS_INCORRECT;
     }
     pointsToPriceMultiplier = Digits() >= 4 ? 1/10000.0 : 1/100.0;
    
-    Print("РРЅРёС†РёР°Р»РёР·Р°С†РёСЏ Р·Р°РІРµСЂС€РµРЅР°. РљРѕРїРёСЂСѓРµРј: ", iflowInstrument, " РѕС‚ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ ",  login);
+    Print("Инициализация завершена. Копируем: ", iflowInstrument, 
+        " от [" , ArraySize(users) , "] пользователей: " ,  usersInput);
    
-    // СЂР°Р· РІ 5 РјРёРЅСѓС‚ Р±СѓРґРµРј РїСЂРѕРІРµСЂСЏС‚СЊ РґР°РЅРЅС‹Рµ СЃ Investflow.
+    // раз в 5 минут будем проверять данные с Investflow.
     //EventSetTimer(300);
     EventSetTimer(20);
     return INIT_SUCCEEDED;
@@ -51,30 +54,30 @@ void OnDeinit(const int reason) {
 }
 
 void OnTick() {
-    // РґР»СЏ РєР°Р¶РґРѕРіРѕ РѕС‚РєСЂС‹С‚РѕРіРѕ РѕСЂРґРµСЂР° РїСЂРѕРІРµСЂСЏРµРј - РЅРµ РїСЂРёС€Р»Рѕ Р»Рё РІСЂРµРјСЏ РµРіРѕ Р·Р°РєСЂС‹С‚СЊ РїРѕ РёСЃС‚РµС‡РµРЅРёРё РґРЅСЏ.
+    // для каждого открытого ордера проверяем - не пришло ли время его закрыть по истечении дня.
     // TODO
 }
 
 
 void OnTimer() {
-    // РїСЂРѕРІРµСЂСЏРµРј СЃРѕСЃС‚РѕСЏРЅРёРµ РЅР° investflow, РѕС‚РєСЂС‹РІР°РµРј РЅРѕРІС‹Рµ РїРѕР·РёС†РёРё, РµСЃР»Рё РЅСѓР¶РЅРѕ.
+    // проверяем состояние на investflow, открываем новые позиции, если нужно.
     char request[], response[];
     string requestHeaders = "User-Agent: investflow-tc", responseHeaders;
     int rc = WebRequest("GET", "http://investflow.ru/api/get-tc-orders?mode=csv", requestHeaders, 30 * 1000, request, response, responseHeaders);
     if (rc < 0) {
         int err = GetLastError();
-        Print("РћС€РёР±РєР° РїСЂРё РґРѕСЃС‚СѓРїРµ Рє investflow. РљРѕРґ РѕС€РёР±РєРё: ", ErrorDescription(err));
+        Print("Ошибка при доступе к investflow. Код ошибки: ", ErrorDescription(err));
         return;
     }
     string csv = CharArrayToString(response, 0, WHOLE_ARRAY, CP_UTF8);
     string lines[];
     rc = StringSplit(csv, '\n', lines);
     if (rc < 0) {
-        Print("РџСѓСЃС‚РѕР№ РѕС‚РІРµС‚ РѕС‚ investflow. РљРѕРґ РѕС€РёР±РєРё: ", GetLastError());
+        Print("Пустой ответ от investflow. Код ошибки: ", GetLastError());
         return;
     }
     if (StringCompare("order_id, user_id, user_login, instrument, order_type, open, close, stop", lines[0]) != 0) {
-        Print("РќРµРїРѕРґРґРµСЂР¶РёРІР°РµРјС‹Р№ С„РѕСЂРјР°С‚ РѕС‚РІРµС‚Р°: ", lines[0]);
+        Print("Неподдерживаемый формат ответа: ", lines[0]);
         return;
     }
     for (int i = 1, n = ArraySize(lines); i < n; i++) {
@@ -85,13 +88,13 @@ void OnTimer() {
         string tokens[];
         rc = StringSplit(line, ',', tokens);
         if (rc != 8) {
-            Print("РћС€РёР±РєР° РїР°СЂСЃРёРЅРіР° СЃС‚СЂРѕРєРё: ", line);
+            Print("Ошибка парсинга строки: ", line);
             break;
         }
         int orderId = StrToInteger(tokens[0]);
         int userId = StrToInteger(tokens[1]);
         string userLogin = tokens[2];
-        if (StringCompare(login, userLogin) != 0) {
+        if (!isTrackedUser(userLogin)) {
             continue;
         }
         string instrument = tokens[3];
@@ -104,45 +107,54 @@ void OnTimer() {
         int stopPoints = StrToInteger(tokens[7]);
       
         int type = StringCompare("buy", orderType) == 0 ? OP_BUY : OP_SELL;
-        openOrderIfNeeded(orderId, type, openPrice, stopPoints);
+        openOrderIfNeeded(orderId, type, openPrice, stopPoints, userLogin);
     }
 }
 
-void openOrderIfNeeded(int magicNumber, int orderType, double openPrice, int stopPoints) {
+bool isTrackedUser(string login) {
+    for (int i = 0, n = ArraySize(users); i < n; i++) {
+        if (StringCompare(users[i], login) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void openOrderIfNeeded(int magicNumber, int orderType, double openPrice, int stopPoints, string user) {
     for(int i = 0, n = OrdersTotal(); i < n; i++) {
         if (!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) {
             continue;
         }
-        if (magicNumber == OrderMagicNumber()) { // РѕСЂРґРµСЂ СѓР¶Рµ СЃРґРµР»Р°РЅ
+        if (magicNumber == OrderMagicNumber()) { // ордер уже сделан
             return;
         }
     }
-    // РѕСЂРґРµСЂ РµС‰Рµ РЅРµ РѕС‚СЂР°Р±РѕС‚Р°РЅ: РѕС‚РєСЂРѕРµРј РµРіРѕ РµСЃР»Рё С‚РµРєСѓС‰РёРµ СѓСЃР»РѕРІРёСЏ С‚Рµ Р¶Рµ РёР»Рё Р»СѓС‡С€Рµ СѓРєР°Р·Р°РЅРЅС‹С… С‚СЂРµР№РґРµСЂРѕРј
+    // ордер еще не отработан: откроем его если текущие условия те же или лучше указанных трейдером
     bool isBuy = orderType == OP_BUY;
     double currentPrice = MarketInfo(Symbol(), isBuy ? MODE_ASK : MODE_BID);
 
-    // РІС‹СЃС‚Р°РІР»СЏРµРј РѕСЂРґРµСЂ С‚РѕР»СЊРєРѕ РµСЃР»Рё РїРѕР»СѓС‡РёР»Рё СЂРµР°Р»СЊРЅСѓСЋ С†РµРЅСѓ РѕС‚РєСЂС‹С‚РёСЏ РёР· РєРѕРЅРєСѓСЂСЃР°
-    // Рё С‚РµРєСѓС‰Р°СЏ СЃРёС‚СѓР°С†РёСЏ РЅР° СЂС‹РЅРєРµ РЅРµ С…СѓР¶Рµ, С‡РµРј РєРѕРіРґР° РѕС‚РєСЂС‹РІР°Р»СЃСЏ СѓС‡Р°СЃС‚РЅРёРє
+    // выставляем ордер только если получили реальную цену открытия из конкурса
+    // и текущая ситуация на рынке не хуже, чем когда открывался участник
     bool placeOrder  = openPrice <=0 || (isBuy ? openPrice <= currentPrice : openPrice >= currentPrice);
    
-    string comment = "Investflow: " + login;
+    string comment = "Investflow: " + user;
     double stopInPrice = (stopPoints <= 0 ? defaultStopPoints : stopPoints) * pointsToPriceMultiplier;
     double stopLoss = isBuy ? currentPrice - stopInPrice : currentPrice + stopInPrice;
     double takeProfit = isBuy ? currentPrice + stopInPrice : currentPrice - stopInPrice;
    
-    Print("РћС‚РєСЂС‹РІР°РµРј РїРѕР·РёС†РёСЋ, С†РµРЅР°: ", currentPrice, 
-        ", РѕР±СЉС‘Рј: ", lots, 
-        ", С‚РёРї: ", (isBuy ? "BUY" : "SELL"),
+    Print("Открываем позицию, цена: ", currentPrice, 
+        ", объём: ", lots, 
+        ", тип: ", (isBuy ? "BUY" : "SELL"),
         ", SL: ", stopLoss, 
         ", TP: ", takeProfit, 
-        ", iflow-РєРѕРґ: ", magicNumber);
+        ", iflow-код: ", magicNumber);
    
     int ticket = OrderSend(Symbol(), orderType, lots, currentPrice, slippage, stopLoss, takeProfit, comment, magicNumber);
     if (ticket == -1) {
         int err = GetLastError();
-        Print("РћС€РёР±РєР° РѕС‚РєСЂС‹С‚РёСЏ РїРѕР·РёС†РёРё ", err, ": ", ErrorDescription(err));
+        Print("Ошибка открытия позиции ", err, ": ", ErrorDescription(err));
     } else {
-        Print("РџРѕР·РёС†РёСЏ РѕС‚РєСЂС‹С‚Р°, С‚РёРєРµС‚: ", ticket);
+        Print("Позиция открыта, тикет: ", ticket);
     }
 }
 
@@ -167,7 +179,7 @@ string getChartSymbol() {
         return "BRENT";
     }
         
-    // РџСЂР°РІРєР° РґР»СЏ AMarkets: РёРЅСЃС‚СЂСѓРјРµРЅС‚С‹ РјРѕРіСѓС‚ РёРјРµС‚СЊ СЃСѓС„С„РёРєСЃ 'b'
+    // Правка для AMarkets: инструменты могут иметь суффикс 'b'
     int len = StringLen(symbol);
     if (StringGetChar(symbol, len-1) == 'b') {
         return StringSubstr(symbol, 0, len - 1);
