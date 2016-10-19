@@ -11,7 +11,7 @@
 #include <stdlib.mqh> 
 
 // входные параметры:
-input string usersInput = "AndreyB"; // имена участников для копирования через запятую
+input string usersInput = "1,2,3"; // имена участников для копирования через запятую, либо место в рейтинге для данного инструмента: 1,2,3
 input double lots = 0.1; // объём сделки (лотность)
 input int defaultStopPoints = 50; // размер стопа, в случае если его не выставил трейдер.
 input int slippage = 0; // параметр slippage при открытии ордеров
@@ -76,7 +76,7 @@ void OnTimer() {
         Print("Пустой ответ от investflow. Код ошибки: ", GetLastError());
         return;
     }
-    if (StringCompare("order_id, user_id, user_login, instrument, order_type, open, close, stop", lines[0]) != 0) {
+    if (StringCompare("order_id, user_id, user_login, instrument, order_type, open, close, stop, class_rating", lines[0]) != 0) {
         Print("Неподдерживаемый формат ответа: ", lines[0]);
         return;
     }
@@ -87,14 +87,15 @@ void OnTimer() {
         }
         string tokens[];
         rc = StringSplit(line, ',', tokens);
-        if (rc != 8) {
+        if (rc != 9) {
             Print("Ошибка парсинга строки: ", line);
             break;
         }
         int orderId = StrToInteger(tokens[0]);
         int userId = StrToInteger(tokens[1]);
         string userLogin = tokens[2];
-        if (!isTrackedUser(userLogin)) {
+        string ratingPos = tokens[8];
+        if (!isTrackedUser(userLogin) && !isTrackedUser(ratingPos)) {
             continue;
         }
         string instrument = tokens[3];
