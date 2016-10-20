@@ -15,7 +15,9 @@ input string usersInput = "1,2,3"; // имена участников для к�
 input double lots = 0.1; // объём сделки (лотность)
 input int defaultStopPoints = 50; // размер стопа, в случае если его не выставил трейдер.
 input int slippage = 0; // параметр slippage при открытии ордеров
-   
+input int startHour = 1; // час начала копирования. Начиная с этого часа копирование разрешено. 0..23 по времени сервера
+input int stopHour = 12; // час завершения копирования. Начиная с этого часа в сутках копирование запрещено. 
+
 // Код инструмента от Investflow: EURUSD, GBPUSD, USDJPY, USDRUB, XAUUSD, BRENT
 string iflowInstrument = "";
 
@@ -33,6 +35,10 @@ int OnInit() {
         Print("Недопустимая лотность сделки!");
         return INIT_PARAMETERS_INCORRECT;
     }
+    if (startHour > 23 || startHour >= stopHour) {
+        Print("Некорректный диапазон времени для копирования! C ", startHour, " по ", stopHour);
+        return INIT_PARAMETERS_INCORRECT;
+    }
     iflowInstrument = symbolToIflowInstrument();
     if (StringLen(iflowInstrument) == 0) {
         Print("Инструмент не участвует в конкурсе: ", Symbol());
@@ -40,8 +46,7 @@ int OnInit() {
     }
     pointsToPriceMultiplier = Digits() >= 4 ? 1/10000.0 : 1/100.0;
    
-    Print("Инициализация завершена. Копируем: ", iflowInstrument, 
-        " от [" , ArraySize(users) , "] пользователей: " ,  usersInput);
+    Print("Инициализация завершена. Копируем: ", iflowInstrument, " от " ,  usersInput);
    
     // раз в 5 минут будем проверять данные с Investflow.
     //EventSetTimer(300);
@@ -60,7 +65,18 @@ void OnTick() {
 
 
 void OnTimer() {
+    // проверяем открыт ли рынок для текущего инструмента
+    if (MarketInfo(Symbol(), MODE_TRADEALLOWED) <= 0) {
+        Print("Рынок закрыт для ", Symbol());
+        return;
+    }
+    if (Hour() < startHour || Hour() >= stopHour) {
+        Print("Копирование запрещено. Часы копирования с ", startHour , " по " , stopHour ,
+                " сейчас: ", Hour(), "ч.");
+        return;
+    }
     // проверяем состояние на investflow, открываем новые позиции, если нужно.
+    Print("Запрашиваем позиции с сервера");
     char request[], response[];
     string requestHeaders = "User-Agent: investflow-tc", responseHeaders;
     int rc = WebRequest("GET", "http://investflow.ru/api/get-tc-orders?mode=csv", requestHeaders, 30 * 1000, request, response, responseHeaders);
@@ -121,14 +137,30 @@ bool isTrackedUser(string login) {
     return false;
 }
 
-void openOrderIfNeeded(int magicNumber, int orderType, double openPrice, int stopPoints, string user) {
+bool findOrderByMagicNumber(int magicNumber) {
+    // ищем среди открытых ордеров
     for(int i = 0, n = OrdersTotal(); i < n; i++) {
-        if (!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) {
-            continue;
+        if (OrderSelect(i, SELECT_BY_POS, MODE_TRADES) && magicNumber == OrderMagicNumber()) {
+            return true;
         }
-        if (magicNumber == OrderMagicNumber()) { // ордер уже сделан
-            return;
+    }
+    // ищем среди закрытых ордеров, проверяем не более 100 последних ордеров
+    for(int i = 0, n = OrdersHistoryTotal(); i < n && i < 100; i++) {
+        int idx = n - i - 1;
+        if (OrderSelect(idx, SELECT_BY_POS, MODE_HISTORY) && magicNumber == OrderMagicNumber()) {
+            return true;
         }
+    }
+
+    return false;
+}
+
+void openOrderIfNeeded(int magicNumber, int orderType, double openPrice, int stopPoints, string user) {
+    // проверим, не был ли уже обработан ордер
+    bool processed = findOrderByMagicNumber(magicNumber);
+    if (processed) {
+        Print("Позиция уже была скопирована: ", magicNumber, " пользователь:", user);
+        return;
     }
     // ордер еще не отработан: откроем его если текущие условия те же или лучше указанных трейдером
     bool isBuy = orderType == OP_BUY;
@@ -137,13 +169,16 @@ void openOrderIfNeeded(int magicNumber, int orderType, double openPrice, int sto
     // выставляем ордер только если получили реальную цену открытия из конкурса
     // и текущая ситуация на рынке не хуже, чем когда открывался участник
     bool placeOrder  = openPrice <=0 || (isBuy ? openPrice <= currentPrice : openPrice >= currentPrice);
-   
+    if (!placeOrder) {
+        Print("Не выполнены условия открытия для ", user);
+        return;
+    }
     string comment = "Investflow: " + user;
     double stopInPrice = (stopPoints <= 0 ? defaultStopPoints : stopPoints) * pointsToPriceMultiplier;
     double stopLoss = isBuy ? currentPrice - stopInPrice : currentPrice + stopInPrice;
     double takeProfit = isBuy ? currentPrice + stopInPrice : currentPrice - stopInPrice;
    
-    Print("Открываем позицию, цена: ", currentPrice, 
+    Print("Копируем позицию ", user, ", цена: ", currentPrice, 
         ", объём: ", lots, 
         ", тип: ", (isBuy ? "BUY" : "SELL"),
         ", SL: ", stopLoss, 
@@ -182,7 +217,7 @@ string getChartSymbol() {
         
     // Правка для AMarkets: инструменты могут иметь суффикс 'b'
     int len = StringLen(symbol);
-    if (StringGetChar(symbol, len-1) == 'b') {
+    if (StringGetChar(symbol, len - 1) == 'b') {
         return StringSubstr(symbol, 0, len - 1);
     }
     return symbol;
