@@ -50,7 +50,7 @@ int OnInit() {
    
     // раз в 5 минут будем проверять данные с Investflow.
     //EventSetTimer(300);
-    EventSetTimer(20);
+    EventSetTimer(30);
     return INIT_SUCCEEDED;
 }
 
@@ -109,13 +109,15 @@ void OnTimer() {
         }
         int orderId = StrToInteger(tokens[0]);
         int userId = StrToInteger(tokens[1]);
+       
+        string instrument = tokens[3];
+        if (StringCompare(instrument, iflowInstrument) != 0) {
+            continue;
+        }
+              
         string userLogin = tokens[2];
         string ratingPos = tokens[8];
         if (!isTrackedUser(userLogin) && !isTrackedUser(ratingPos)) {
-            continue;
-        }
-        string instrument = tokens[3];
-        if (StringCompare(instrument, iflowInstrument) != 0) {
             continue;
         }
         string orderType = tokens[4];
@@ -123,6 +125,8 @@ void OnTimer() {
         // double closePrice = StrToDouble(tokens[6]);
         int stopPoints = StrToInteger(tokens[7]);
       
+        Print("Найдена позиция для копирования от ", userLogin, ", тип: ", orderType);
+        
         int type = StringCompare("buy", orderType) == 0 ? OP_BUY : OP_SELL;
         openOrderIfNeeded(orderId, type, openPrice, stopPoints, userLogin);
     }
