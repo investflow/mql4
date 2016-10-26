@@ -11,12 +11,15 @@
 #include <stdlib.mqh> 
 
 // входные параметры:
-input string usersInput = "1,2,3"; // имена участников для копирования через запятую, либо место в рейтинге для данного инструмента: 1,2,3
-input double lots = 0.1; // объём сделки (лотность)
-input int defaultStopPoints = 50; // размер стопа, в случае если его не выставил трейдер.
-input int slippage = 0; // параметр slippage при открытии ордеров
-input int startHour = 1; // час начала копирования. Начиная с этого часа копирование разрешено. 0..23 по времени сервера
-input int stopHour = 12; // час завершения копирования. Начиная с этого часа в сутках копирование запрещено. 
+input string usersList = "1,2,3"; // Имена участников для копирования через запятую, либо место в рейтинге для данного инструмента: 1,2,3
+input double lots = 0.1; // Объём сделки (лотность)
+input int minSL = 30; // Минимальный размер Stop Loss. Будет использован если SL выставленный трейдером ниже.
+input int maxSL = 100; // Максимальный размер Stop Loss. Будет использоваться если SL выставленный трейдером выше или его нет.
+input int minTP = 50; // Минимальный разрем Take Profit. Будет использован если TP выставленный трейдером ниже.
+input int maxTP = 100; // Максимальный размер Take Profit. Будет использоваться если TP выставленный трейдером выше или его нет.
+input int slippage = 0; // Параметр slippage при открытии ордеров
+input int startHour = 1; // Час начала копирования. Начиная с этого часа копирование разрешено. 0..23 по времени сервера
+input int stopHour = 12; // Час завершения копирования. Начиная с этого часа в сутках копирование запрещено. 
 
 // Код инструмента от Investflow: EURUSD, GBPUSD, USDJPY, USDRUB, XAUUSD, BRENT
 string iflowInstrument = "";
@@ -27,7 +30,7 @@ double pointsToPriceMultiplier = 0;
 string users[];
 
 int OnInit() {
-    if (StringLen(usersInput) == 0 || StringSplit(usersInput, ',', users) == 0) {
+    if (StringLen(usersList) == 0 || StringSplit(usersList, ',', users) == 0) {
         Print("Не указан логин пользователя!");
         return INIT_PARAMETERS_INCORRECT;
     }
@@ -46,11 +49,10 @@ int OnInit() {
     }
     pointsToPriceMultiplier = Digits() >= 4 ? 1/10000.0 : 1/100.0;
    
-    Print("Инициализация завершена. Копируем: ", iflowInstrument, " от " ,  usersInput);
+    Print("Инициализация завершена. Копируем: ", iflowInstrument, " от " ,  usersList);
    
-    // раз в 5 минут будем проверять данные с Investflow.
-    //EventSetTimer(300);
-    EventSetTimer(30);
+    // раз в минуту будем проверять данные с Investflow.
+    EventSetTimer(60);
     return INIT_SUCCEEDED;
 }
 
@@ -122,7 +124,10 @@ void OnTimer() {
         }
         string orderType = tokens[4];
         double openPrice = StrToDouble(tokens[5]);
-        // double closePrice = StrToDouble(tokens[6]);
+        double closePrice = StrToDouble(tokens[6]);
+        if (closePrice > 0) { // позиция уже закрыта - нет смысла копировать.
+            continue;
+        }
         int stopPoints = StrToInteger(tokens[7]);
       
         Print("Найдена позиция для копирования от ", userLogin, ", тип: ", orderType);
@@ -163,7 +168,7 @@ void openOrderIfNeeded(int magicNumber, int orderType, double openPrice, int sto
     // проверим, не был ли уже обработан ордер
     bool processed = findOrderByMagicNumber(magicNumber);
     if (processed) {
-        Print("Позиция уже была скопирована: ", magicNumber, " пользователь:", user);
+        Print("Позиция уже была скопирована: ", magicNumber, "/", user);
         return;
     }
     // ордер еще не отработан: откроем его если текущие условия те же или лучше указанных трейдером
@@ -178,9 +183,12 @@ void openOrderIfNeeded(int magicNumber, int orderType, double openPrice, int sto
         return;
     }
     string comment = "Investflow: " + user;
-    double stopInPrice = (stopPoints <= 0 ? defaultStopPoints : stopPoints) * pointsToPriceMultiplier;
-    double stopLoss = isBuy ? currentPrice - stopInPrice : currentPrice + stopInPrice;
-    double takeProfit = isBuy ? currentPrice + stopInPrice : currentPrice - stopInPrice;
+    int stopLossPoints = getStopPoints(minSL, stopPoints, maxSL);
+    int takeProfitPoints = getStopPoints(minTP, stopLossPoints, maxTP); 
+    double stopLossInPrice =  stopLossPoints * pointsToPriceMultiplier;
+    double takeProfitInPrice =  takeProfitPoints * pointsToPriceMultiplier;
+    double stopLoss = isBuy ? currentPrice - stopLossInPrice : currentPrice + stopLossInPrice;
+    double takeProfit = isBuy ? currentPrice + takeProfitInPrice : currentPrice - takeProfitInPrice;
    
     Print("Копируем позицию ", user, ", цена: ", currentPrice, 
         ", объём: ", lots, 
@@ -196,6 +204,11 @@ void openOrderIfNeeded(int magicNumber, int orderType, double openPrice, int sto
     } else {
         Print("Позиция открыта, тикет: ", ticket);
     }
+}
+
+/* Возвращает значение между min & max. При val <=0 возвращается max. */
+int getStopPoints(int min, int val, int max) {
+    return val <= 0 || val > max ? max : val < min ? min : val; 
 }
 
 string IFLOW_INSTRUMENTS[] = {"EURUSD", "GBPUSD", "USDJPY", "USDRUB", "XAUUSD", "BRENT"};
