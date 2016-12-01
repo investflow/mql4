@@ -19,7 +19,10 @@ input int minTP = 50; // Минимальный разрем Take Profit. Буд
 input int maxTP = 100; // Максимальный размер Take Profit. Будет использоваться если TP выставленный трейдером выше или его нет.
 input int slippage = 0; // Параметр slippage при открытии ордеров
 input int startHour = 1; // Час начала копирования. Начиная с этого часа копирование разрешено. 0..23 по времени сервера
-input int stopHour = 12; // Час завершения копирования. Начиная с этого часа в сутках копирование запрещено. 
+input int stopHour = 12; // Час завершения копирования. Начиная с этого часа в сутках копирование запрещено.
+
+//TODO: input bool closeOnDayEnd = 1; // Закрывать ли сделки как в конкурсе (принудительно) по окончанию дня: 1 - да, 0 - нет
+
 
 // Код инструмента от Investflow: EURUSD, GBPUSD, USDJPY, USDRUB, XAUUSD, BRENT
 string iflowInstrument = "";
@@ -28,6 +31,8 @@ string iflowInstrument = "";
 double pointsToPriceMultiplier = 0;
 
 string users[];
+
+const int MAGIC = 337688502;
 
 int OnInit() {
     if (StringLen(usersList) == 0 || StringSplit(usersList, ',', users) == 0) {
@@ -146,17 +151,21 @@ bool isTrackedUser(string login) {
     return false;
 }
 
-bool findOrderByMagicNumber(int magicNumber) {
+string getOrderIdCommentToken(int orderId) {
+    return "code: " + (string)orderId;
+}
+
+bool findOrderById(int orderId) {
     // ищем среди открытых ордеров
     for(int i = 0, n = OrdersTotal(); i < n; i++) {
-        if (OrderSelect(i, SELECT_BY_POS, MODE_TRADES) && magicNumber == OrderMagicNumber()) {
+        if (OrderSelect(i, SELECT_BY_POS, MODE_TRADES) && OrderMagicNumber() == MAGIC && matchOrderById(orderId)) {
             return true;
         }
     }
     // ищем среди закрытых ордеров, проверяем не более 100 последних ордеров
     for(int i = 0, n = OrdersHistoryTotal(); i < n && i < 100; i++) {
         int idx = n - i - 1;
-        if (OrderSelect(idx, SELECT_BY_POS, MODE_HISTORY) && magicNumber == OrderMagicNumber()) {
+        if (OrderSelect(idx, SELECT_BY_POS, MODE_HISTORY) && OrderMagicNumber() == MAGIC && matchOrderById(orderId)) {
             return true;
         }
     }
@@ -164,11 +173,19 @@ bool findOrderByMagicNumber(int magicNumber) {
     return false;
 }
 
-void openOrderIfNeeded(int magicNumber, int orderType, double openPrice, int stopPoints, string user) {
+/* Проверяет что текущий выбранный ордер имеет необходимый orderId (записан в комментарии) */
+bool matchOrderById(int orderId) {
+    string comment = OrderComment();
+    string token = "code: " + (string)orderId;
+    return StringFind(comment, token, 0) > 0;
+}
+
+
+void openOrderIfNeeded(int orderId, int orderType, double openPrice, int stopPoints, string user) {
     // проверим, не был ли уже обработан ордер
-    bool processed = findOrderByMagicNumber(magicNumber);
+    bool processed = findOrderById(orderId);
     if (processed) {
-        Print("Позиция уже была скопирована: ", magicNumber, "/", user);
+        Print("Позиция уже была скопирована: ", orderId, "/", user);
         return;
     }
     // ордер еще не отработан: откроем его если текущие условия те же или лучше указанных трейдером
@@ -182,7 +199,7 @@ void openOrderIfNeeded(int magicNumber, int orderType, double openPrice, int sto
         Print("Не выполнены условия открытия для ", user);
         return;
     }
-    string comment = "Investflow: " + user;
+    string comment = "Investflow: " + user + ", " + getOrderIdCommentToken(orderId);
     int stopLossPoints = getStopPoints(minSL, stopPoints, maxSL);
     int takeProfitPoints = getStopPoints(minTP, stopLossPoints, maxTP); 
     double stopLossInPrice =  stopLossPoints * pointsToPriceMultiplier;
@@ -195,9 +212,9 @@ void openOrderIfNeeded(int magicNumber, int orderType, double openPrice, int sto
         ", тип: ", (isBuy ? "BUY" : "SELL"),
         ", SL: ", stopLoss, 
         ", TP: ", takeProfit, 
-        ", iflow-код: ", magicNumber);
+        ", iflow-код: ", orderId);
    
-    int ticket = OrderSend(Symbol(), orderType, lots, currentPrice, slippage, stopLoss, takeProfit, comment, magicNumber);
+    int ticket = OrderSend(Symbol(), orderType, lots, currentPrice, slippage, stopLoss, takeProfit, comment, MAGIC);
     if (ticket == -1) {
         int err = GetLastError();
         Print("Ошибка открытия позиции ", err, ": ", ErrorDescription(err));
