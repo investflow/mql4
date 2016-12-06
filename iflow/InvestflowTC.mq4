@@ -30,7 +30,7 @@ double pointsToPriceMultiplier = 0;
 
 string users[];
 
-const int MAGIC = 337687501;
+const int MAGIC = 397687501;
 
 int OnInit() {
     if (StringLen(usersList) == 0 || StringSplit(usersList, ',', users) == 0) {
@@ -309,6 +309,9 @@ void closeOrdersNotInList(const int & iflowActiveOrderIds[], const int nIflowAct
     // ищем среди открытых ордеров
     for(int i = 0, nOrders = OrdersTotal(); i < nOrders; i++) {
         if (OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) {
+            if (OrderMagicNumber() != MAGIC || OrderSymbol() != Symbol()) {
+                continue; // позиция открыта не нами - игнорируем.
+            }
             bool activeOnIflow = false;
             for (int j = 0; j < nIflowActive; j++) {
                 int matchResult = matchOrderById(iflowActiveOrderIds[j]);
