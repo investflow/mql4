@@ -20,6 +20,7 @@ input int maxTP = 100; // Максимальный размер Take Profit. Б�
 input int slippage = 0; // Параметр slippage при открытии ордеров
 input int startHour = 1; // Час начала копирования. Начиная с этого часа копирование разрешено. 0..23 по времени сервера
 input int stopHour = 12; // Час завершения копирования. Начиная с этого часа в сутках копирование запрещено.
+input int closeAsInvestflow = 1; // Закрывать сделку, если закрыта на Investflow. 1 - да, 0 - нет
 
 // Код инструмента от Investflow: EURUSD, GBPUSD, USDJPY, USDRUB, XAUUSD, BRENT
 string activeInstrument = "";
@@ -50,6 +51,11 @@ int OnInit() {
         return INIT_PARAMETERS_INCORRECT;
     }
     pointsToPriceMultiplier = Digits() >= 4 ? 1/10000.0 : 1/100.0;
+
+    if (closeAsInvestflow != 0 && closeAsInvestflow != 1) {
+        Print("Некорректный флаг закрытия сделок как на Investflow. Допустимые значения: 0 или 1. Сейчас: ", closeAsInvestflow);
+        return INIT_PARAMETERS_INCORRECT;
+    }
    
     Print("Инициализация завершена. Копируем: ", activeInstrument, " от " ,  usersList);
    
@@ -99,7 +105,19 @@ void OnTimer() {
         Print("Неподдерживаемый формат ответа: ", lines[0]);
         return;
     }
-    for (int i = 1, n = ArraySize(lines); i < n; i++) {
+
+    int nLines = ArraySize(lines);
+
+    // массив для списка открытых на Investflow ордеров
+    int iflowActiveOrderIds[];
+    int nActiveOrders = 0;
+    rc = ArrayResize(iflowActiveOrderIds, nLines);
+    if (rc != nLines) {
+        Print("Не удалось создать массив для открытых ордеров размером ", nLines);
+        return;
+    }
+
+    for (int i = 1; i < nLines; i++) {
         string line = lines[i];
         if (StringLen(line) == 0) {
             continue;
@@ -129,12 +147,20 @@ void OnTimer() {
         if (closePrice > 0) { // позиция уже закрыта - нет смысла копировать.
             continue;
         }
+        iflowActiveOrderIds[nActiveOrders] = iflowOrderId;
+        nActiveOrders++;
+
         int stopPoints = StrToInteger(tokens[7]);
       
         Print("Найдена позиция для копирования от ", userLogin, ", тип: ", orderType);
         
         int type = StringCompare("buy", orderType) == 0 ? OP_BUY : OP_SELL;
         openOrderIfNeeded(iflowOrderId, type, openPrice, stopPoints, userLogin);
+    }
+
+    // закроем все открытые ордера в терминале, которых нет в списке от Investflow
+    if (closeAsInvestflow) {
+        closeOrdersNotInList(iflowActiveOrderIds, nActiveOrders);
     }
 }
 
@@ -192,7 +218,7 @@ int matchOrderById(int iflowOrderId) {
         return -1;
     }
     string token = getIflowOrderIdCommentToken(iflowOrderId);
-    // ответ 1 ("да") если iflowOrderId совпал, иначе 0 ("ytn")
+    // ответ 1 ("да") если iflowOrderId совпал, иначе 0 ("нет")
     return StringFind(comment, token, 0) > 0 ? 1 : 0;
 }
 
@@ -277,4 +303,33 @@ string getChartSymbol() {
     }
     return result;
 
+}
+
+void closeOrdersNotInList(const int & iflowActiveOrderIds[], const int nIflowActive) {
+    // ищем среди открытых ордеров
+    for(int i = 0, nOrders = OrdersTotal(); i < nOrders; i++) {
+        if (OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) {
+            bool activeOnIflow = false;
+            for (int j = 0; j < nIflowActive; j++) {
+                int matchResult = matchOrderById(iflowActiveOrderIds[j]);
+                if (matchResult == 1) {
+                    activeOnIflow = true;
+                    break;
+                }
+            }
+            if (activeOnIflow) {
+                continue; // ордер найден на investflow и активен - ничего не делаем.
+            }
+            // закрываем ордер.
+            Print("Закрываем позицию: не активна на Investflow: ", OrderComment());
+            string symbol = OrderSymbol();
+            double closePrice = MarketInfo(symbol, OrderType() == OP_BUY ? MODE_BID: MODE_ASK);
+            int digits = (int)MarketInfo(symbol,MODE_DIGITS);
+            bool ok = OrderClose(OrderTicket(), OrderLots(), NormalizeDouble(closePrice, digits), slippage);
+            if (!ok) {
+                int err = GetLastError();
+                Print("Ошибка закрытия позиции ", OrderComment(), ": ", ErrorDescription(err));
+            }
+        }
+    }
 }
