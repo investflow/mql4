@@ -8,12 +8,16 @@
             bid_price  DECIMAL(10,5) NOT NULL,
             ask_price  DECIMAL(10,5) NOT NULL
         ) ENGINE = InnoDB;
+
+    How to create new user:
+        -> CREATE USER 'tickmaster'@'127.0.0.1' IDENTIFIED BY '12345';
+        -> GRANT INSERT ON quotes.* TO 'tickmaster'@'127.0.0.1';
 */
 
 input string mysqlHost = "127.0.0.1"; //MySQL host address. Use IP but not HostName to avoid DNS resolves when opening connections.
 input int mysqlPort = 3306; //MySQL server port.
 input string mysqlSchema = "quotes"; // Database schema name in MySQL server.
-input string mysqlUser = "root"; // MySQL login.
+input string mysqlUser = "tickmaster"; // MySQL login.
 input string mysqlPassword = "12345"; // MySQL password.
 input string tableName; // Table name to store quotes. By default Symbol() is used.
 
@@ -82,12 +86,15 @@ int reconnect() {
         Print("mysql_real_connect failed, mysql_errno: ", errno);
         return INIT_FAILED;
     }
+    Print("Successfully connected to MySQL database");
     return INIT_SUCCEEDED;
 }
 
 // expert deinitialization: closes MySQL connection.
 void OnDeinit(const int reason) {
-    mysql_close(connectId);
+    if (connectId != 0) {
+        mysql_close(connectId);
+    }
 }
 
 // Dump every tick to file.
@@ -98,14 +105,17 @@ void OnTick() {
             return;
         }
     }
-    string statementString = "INSERT INTO " + table + "(quote_time, bid_price, ask_price) VALUES(NOW(3)," + Bid + "," + Ask + ")";
+    string statementString = "INSERT INTO " + table + "(quote_time,bid_price,ask_price) VALUES(NOW(3)," + Bid + "," + Ask + ")";
     uchar statement[];
     StringToCharArray(statementString, statement);
 
     rc = mysql_real_query(connectId, statement, ArraySize(statement));
     if (rc != 0) {
         int errno = mysql_errno(connectId);
-        Print("mysql_errno failed, mysql_errno: ", errno);
-        connectId = 0;
+        Print("mysql_real_query failed: '" , statementString , "' , mysql_errno: ", errno);
+        if (connectId != 0) {
+            mysql_close(connectId);
+            connectId = 0;
+        }
     }
 }
