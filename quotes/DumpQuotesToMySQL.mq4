@@ -7,7 +7,7 @@
             quote_time DATETIME(3) NOT NULL,
             bid_price  DECIMAL(10,5) NOT NULL,
             ask_price  DECIMAL(10,5) NOT NULL
-        ) ENGINE = InnoDB;
+        ) ENGINE = MyISAM;
 
     How to create new user:
         -> CREATE USER 'tickmaster'@'127.0.0.1' IDENTIFIED BY '12345';
