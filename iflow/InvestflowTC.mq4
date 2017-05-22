@@ -18,15 +18,12 @@ input int maxSL = 100; // Максимальный размер Stop Loss. Бу�
 input int minTP = 50; // Минимальный разрем Take Profit. Будет использован если TP выставленный трейдером ниже.
 input int maxTP = 100; // Максимальный размер Take Profit. Будет использоваться если TP выставленный трейдером выше или его нет.
 input int slippage = 0; // Параметр slippage при открытии ордеров
-input int startHour = 1; // Час начала копирования. Начиная с этого часа копирование разрешено. 0..23 по времени сервера
-input int stopHour = 12; // Час завершения копирования. Начиная с этого часа в сутках копирование запрещено.
-input int closeAsInvestflow = 1; // Закрывать сделку, если закрыта на Investflow. 1 - да, 0 - нет
 
-// Код инструмента от Investflow: EURUSD, GBPUSD, USDJPY, USDRUB, XAUUSD, BRENT
+//todo:
+input int verbose = 0; // Режим очень детального лога. Советник будет сообщать в лог о каждом шаге.
+
+// Классический код торгуемого инструмента (например EURUSD), без специфики брокера (суффиксы, префиксы)
 string activeInstrument = "";
-
-// Константа для перевода Investflow points в дельту для цены
-double pointsToPriceMultiplier = 0;
 
 string users[];
 
@@ -34,15 +31,11 @@ const int MAGIC = 397687501;
 
 int OnInit() {
     if (StringLen(usersList) == 0 || StringSplit(usersList, ',', users) == 0) {
-        Print("Не указан логин пользователя!");
+        Print("Не указан логин пользователя для копирования!");
         return INIT_PARAMETERS_INCORRECT;
     }
     if (lots <= 0 || lots > 10) {
         Print("Недопустимая лотность сделки!");
-        return INIT_PARAMETERS_INCORRECT;
-    }
-    if (startHour > 23 || startHour >= stopHour) {
-        Print("Некорректный диапазон времени для копирования! C ", startHour, " по ", stopHour);
         return INIT_PARAMETERS_INCORRECT;
     }
     activeInstrument = symbolToIflowInstrument();
@@ -50,13 +43,7 @@ int OnInit() {
         Print("Инструмент не участвует в конкурсе или не удалось сопоставить его ни с одним из конкурсных инструментов: ", Symbol());
         return INIT_PARAMETERS_INCORRECT;
     }
-    pointsToPriceMultiplier = Digits() >= 4 ? 1/10000.0 : 1/100.0;
 
-    if (closeAsInvestflow != 0 && closeAsInvestflow != 1) {
-        Print("Некорректный флаг закрытия сделок как на Investflow. Допустимые значения: 0 или 1. Сейчас: ", closeAsInvestflow);
-        return INIT_PARAMETERS_INCORRECT;
-    }
-   
     Print("Инициализация завершена. Копируем: ", activeInstrument, " от " ,  usersList);
    
     // раз в минуту будем проверять данные с Investflow.
@@ -69,26 +56,20 @@ void OnDeinit(const int reason) {
 }
 
 void OnTick() {
-    // для каждого открытого ордера проверяем - не пришло ли время его закрыть по истечении дня.
-    // TODO
+    // вся работа идёт по отдельному таймеру.
 }
 
 
 void OnTimer() {
     // проверяем открыт ли рынок для текущего инструмента
     if (MarketInfo(Symbol(), MODE_TRADEALLOWED) <= 0) {
-        Print("Рынок закрыт для ", Symbol());
         return;
     }
-    if (Hour() < startHour || Hour() >= stopHour) {
-        Print("Копирование запрещено. Часы копирования с ", startHour , " по " , stopHour , " сейчас: ", Hour(), "ч.");
-        return;
-    }
-    // проверяем состояние на investflow, открываем новые позиции, если нужно.
-    Print("Запрашиваем позиции с сервера");
+    // проверяем состояние на Investflow, открываем новые позиции, если нужно.
+    Verbose("Запрашиваем позиции с сервера");
     char request[], response[];
     string requestHeaders = "User-Agent: investflow-tc", responseHeaders;
-    int rc = WebRequest("GET", "http://investflow.ru/api/get-tc-orders?mode=csv", requestHeaders, 30 * 1000, request, response, responseHeaders);
+    int rc = WebRequest("GET", "http://investflow.ru/api/get-tc-orders?mode=csv?symbol=" + activeInstrument, requestHeaders, 30 * 1000, request, response, responseHeaders);
     if (rc < 0) {
         int err = GetLastError();
         Print("Ошибка при доступе к investflow. Код ошибки: ", ErrorDescription(err));
@@ -98,10 +79,10 @@ void OnTimer() {
     string lines[];
     rc = StringSplit(csv, '\n', lines);
     if (rc < 0) {
-        Print("Пустой ответ от investflow. Код ошибки: ", GetLastError());
+        Verbose("Пустой ответ от investflow. Код ошибки: " + (string)GetLastError());
         return;
     }
-    if (StringCompare("order_id, user_id, user_login, instrument, order_type, open, close, stop, class_rating", lines[0]) != 0) {
+    if (StringCompare("order, symbol, account, order_type, open, sl, tp", lines[0]) != 0) {
         Print("Неподдерживаемый формат ответа: ", lines[0]);
         return;
     }
@@ -129,44 +110,33 @@ void OnTimer() {
             break;
         }
         int iflowOrderId = StrToInteger(tokens[0]);
-        int userId = StrToInteger(tokens[1]);
-       
-        string instrument = tokens[3];
+        string instrument = tokens[1];
         if (StringCompare(instrument, activeInstrument) != 0) { // другой инструмент
             continue;
         }
-              
-        string userLogin = tokens[2];
-        string ratingPos = tokens[8];
-        if (!isTrackedUser(userLogin) && !isTrackedUser(ratingPos)) { // этого пользователя мы не отслеживаем
+        string account = tokens[2];
+        if (!isTrackedAccount(account)) { // этого пользователя мы не отслеживаем
             continue;
         }
-        string orderType = tokens[4];
-        double openPrice = StrToDouble(tokens[5]);
-        double closePrice = StrToDouble(tokens[6]);
-        if (closePrice > 0) { // позиция уже закрыта - нет смысла копировать.
-            continue;
-        }
+        string orderType = tokens[3];
+        double openPrice = StrToDouble(tokens[4]);
+        double stopLossPrice = StrToDouble(tokens[5]);
+        double takeProfitPrice = StrToDouble(tokens[6]);
+
         iflowActiveOrderIds[nActiveOrders] = iflowOrderId;
         nActiveOrders++;
 
-        int stopPoints = StrToInteger(tokens[7]);
-      
-        Print("Найдена позиция для копирования от ", userLogin, ", тип: ", orderType);
-        
         int type = StringCompare("buy", orderType) == 0 ? OP_BUY : OP_SELL;
-        openOrderIfNeeded(iflowOrderId, type, openPrice, stopPoints, userLogin);
+        openOrderIfNeeded(iflowOrderId, account, type, openPrice, stopLossPrice, takeProfitPrice);
     }
 
-    // закроем все открытые ордера в терминале, которых нет в списке от Investflow
-    if (closeAsInvestflow) {
-        closeOrdersNotInList(iflowActiveOrderIds, nActiveOrders);
-    }
+    // закрываем все открытые советником ордера, которых нет в списке от Investflow
+    closeOrdersNotInList(iflowActiveOrderIds, nActiveOrders);
 }
 
-bool isTrackedUser(string login) {
+bool isTrackedAccount(const string& account) {
     for (int i = 0, n = ArraySize(users); i < n; i++) {
-        if (StringCompare(users[i], login) == 0) {
+        if (StringCompare(users[i], account) == 0) {
             return true;
         }
     }
@@ -214,7 +184,7 @@ int matchOrderById(int iflowOrderId) {
     }
     string comment = OrderComment();
     if (StringLen(comment) == 0) { // у позиции нет комментария - ответ "ошибка"
-        Print("У позиции открытой советником нет комментария - невозможно определить оригинальный код! Ордер: ", OrderTicket());
+        Verbose("У позиции открытой советником нет комментария - невозможно определить оригинальный код! Ордер: " + (string)OrderTicket());
         return -1;
     }
     string token = getIflowOrderIdCommentToken(iflowOrderId);
@@ -227,45 +197,38 @@ int matchOrderById(int iflowOrderId) {
     если не открыт, проверяет не выполнены ли условия открытия
     и если условия выполнены - открывает ордер
 */
-void openOrderIfNeeded(int iflowOrderId, int orderType, double openPrice, int stopPoints, string user) {
+void openOrderIfNeeded(int iflowOrderId, string masterAccount, int orderType, double openPrice, double stopLossPrice, double takeProfitPrice) {
     // проверим, не был ли уже обработан ордер
     bool processed = isOrderProcessed(iflowOrderId);
     if (processed) {
-        Print("Позиция уже была скопирована: ", user, ", " + getIflowOrderIdCommentToken(iflowOrderId));
+        Verbose("Позиция уже была скопирована: " + masterAccount + ", " + getIflowOrderIdCommentToken(iflowOrderId));
         return;
     }
     // ордер еще не отработан: откроем его если текущие условия те же или лучше указанных трейдером
     bool isBuy = orderType == OP_BUY;
     double currentPrice = MarketInfo(Symbol(), isBuy ? MODE_ASK : MODE_BID);
 
-    // выставляем ордер только если получили реальную цену открытия из конкурса
-    // и текущая ситуация на рынке не хуже, чем когда открывался участник
+    // выставляем ордер только если текущая ситуация на рынке не хуже, чем цена при которой открывался мастер
     bool placeOrder  = openPrice <=0 || (isBuy ? openPrice <= currentPrice : openPrice >= currentPrice);
     if (!placeOrder) {
-        Print("Не выполнены условия открытия для ", user);
+        Verbose("Не выполнены условия открытия для "+ masterAccount);
         return;
     }
-    string comment = user + ", " + getIflowOrderIdCommentToken(iflowOrderId);
-    int stopLossPoints = getStopPoints(minSL, stopPoints, maxSL);
-    int takeProfitPoints = getStopPoints(minTP, stopLossPoints, maxTP); 
-    double stopLossInPrice =  stopLossPoints * pointsToPriceMultiplier;
-    double takeProfitInPrice =  takeProfitPoints * pointsToPriceMultiplier;
-    double stopLoss = isBuy ? currentPrice - stopLossInPrice : currentPrice + stopLossInPrice;
-    double takeProfit = isBuy ? currentPrice + takeProfitInPrice : currentPrice - takeProfitInPrice;
-   
-    Print("Копируем позицию ", user, ", цена: ", currentPrice, 
-        ", объём: ", lots, 
-        ", тип: ", (isBuy ? "BUY" : "SELL"),
-        ", SL: ", stopLoss, 
-        ", TP: ", takeProfit, 
+
+    string comment = masterAccount + ", " + getIflowOrderIdCommentToken(iflowOrderId);
+    Print("Копируем позицию " +  masterAccount + ", цена: " + (string)currentPrice +
+        ", объём: " + (string)lots +
+        ", тип: " + (isBuy ? "BUY" : "SELL") +
+        ", SL: " + (string)stopLossPrice,
+        ", TP: ", takeProfitPrice,
         ", iflow-код: ", iflowOrderId);
    
-    int ticket = OrderSend(Symbol(), orderType, lots, currentPrice, slippage, stopLoss, takeProfit, comment, MAGIC);
+    int ticket = OrderSend(Symbol(), orderType, lots, currentPrice, slippage, stopLossPrice, takeProfitPrice, comment, MAGIC);
     if (ticket == -1) {
         int err = GetLastError();
-        Print("Ошибка открытия позиции ", err, ": ", ErrorDescription(err));
+        Print("Ошибка открытия позиции " + (string)err + ": "  + ErrorDescription(err));
     } else {
-        Print("Позиция открыта, ", comment, ", Ордер: ", ticket);
+        Print("Позиция открыта, " + comment + ", Ордер: " + (string)ticket);
     }
 }
 
@@ -274,7 +237,7 @@ int getStopPoints(int min, int val, int max) {
     return val <= 0 || val > max ? max : val < min ? min : val; 
 }
 
-string IFLOW_INSTRUMENTS[] = {"EURUSD", "GBPUSD", "USDJPY", "USDRUB", "XAUUSD", "BRENT"};
+string IFLOW_INSTRUMENTS[] = {"EURUSD", "GBPUSD", "USDCHF", "USDJPY", "USDCAD", "AUDUSD", "XAUUSD"};
 
 /* Возвращает Investflow имя для текущего Symbol() */
 string symbolToIflowInstrument() {
@@ -285,17 +248,13 @@ string symbolToIflowInstrument() {
             return iflowSymbol;
         }
     }
-    
+
     return NULL;
 }
 
 string getChartSymbol() {
     string result = Symbol();
 
-    if (StringCompare(result, "UKOIL") == 0) {
-        return "BRENT";
-    }
-        
     // Правка для AMarkets: инструменты могут иметь суффиксы 'b', 'c' ...
     int len = StringLen(result);
     if (len > 6) {
@@ -324,15 +283,21 @@ void closeOrdersNotInList(const int & iflowActiveOrderIds[], const int nIflowAct
                 continue; // ордер найден на investflow и активен - ничего не делаем.
             }
             // закрываем ордер.
-            Print("Закрываем позицию: не активна на Investflow: ", OrderComment());
+            Print("Закрываем позицию. Причина: закрыта на Investflow: " + OrderComment());
             string symbol = OrderSymbol();
             double closePrice = MarketInfo(symbol, OrderType() == OP_BUY ? MODE_BID: MODE_ASK);
             int digits = (int)MarketInfo(symbol,MODE_DIGITS);
             bool ok = OrderClose(OrderTicket(), OrderLots(), NormalizeDouble(closePrice, digits), slippage);
             if (!ok) {
                 int err = GetLastError();
-                Print("Ошибка закрытия позиции ", OrderComment(), ": ", ErrorDescription(err));
+                Print("Ошибка закрытия позиции " + OrderComment() + ": " + ErrorDescription(err));
             }
         }
+    }
+}
+
+void Verbose(string message) {
+    if (verbose) {
+        Print(message);
     }
 }
