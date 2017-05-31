@@ -4,34 +4,34 @@
 //|                                             http://investflow.ru |
 //+------------------------------------------------------------------+
 #property copyright "Investflow & Co"
-#property link      "http://investflow.ru"
+#property link      "http://investflow.ru/ts"
 #property version   "1.00"
 #property strict
 
 #include <stdlib.mqh> 
 
 // входные параметры:
-input string usersList = "1,2,3"; // Имена участников для копирования через запятую, либо место в рейтинге для данного инструмента: 1,2,3
+input string usersList = ""; // Имена участников для копирования через запятую
 input double lots = 0.1; // Объём сделки (лотность)
-input int minSL = 30; // Минимальный размер Stop Loss. Будет использован если SL выставленный трейдером ниже.
-input int maxSL = 100; // Максимальный размер Stop Loss. Будет использоваться если SL выставленный трейдером выше или его нет.
-input int minTP = 50; // Минимальный разрем Take Profit. Будет использован если TP выставленный трейдером ниже.
-input int maxTP = 100; // Максимальный размер Take Profit. Будет использоваться если TP выставленный трейдером выше или его нет.
+input int minSL = 100; // Минимальный размер Stop Loss. Будет использован если SL выставленный трейдером ниже.
+input int maxSL = 200; // Максимальный размер Stop Loss. Будет использоваться если SL выставленный трейдером выше или его нет.
+input int minTP = 100; // Минимальный разрем Take Profit. Будет использован если TP выставленный трейдером ниже.
+input int maxTP = 300; // Максимальный размер Take Profit. Будет использоваться если TP выставленный трейдером выше или его нет.
 input int slippage = 0; // Параметр slippage при открытии ордеров
 
-//todo:
-input int verbose = 0; // Режим очень детального лога. Советник будет сообщать в лог о каждом шаге.
+input int verbose = 0; // Режим очень детального лога. Если не равен 0 - копировщик будет сообщать в лог о каждом шаге.
 
 // Классический код торгуемого инструмента (например EURUSD), без специфики брокера (суффиксы, префиксы)
 string activeInstrument = "";
 
+// список копируемых пользователей
 string users[];
 
 const int MAGIC = 397687501;
 
 int OnInit() {
     if (StringLen(usersList) == 0 || StringSplit(usersList, ',', users) == 0) {
-        Print("Не указан логин пользователя для копирования!");
+        Print("Не указано имя пользователя для копирования!");
         return INIT_PARAMETERS_INCORRECT;
     }
     if (lots <= 0 || lots > 10) {
@@ -56,25 +56,27 @@ void OnDeinit(const int reason) {
 }
 
 void OnTick() {
-    // вся работа идёт по отдельному таймеру.
+    // вся работа идёт по событию таймера.
 }
 
 
 void OnTimer() {
-    // проверяем открыт ли рынок для текущего инструмента
+    // проверяем открыт ли рынок для текущего инструмента.
     if (MarketInfo(Symbol(), MODE_TRADEALLOWED) <= 0) {
         return;
     }
+
     // проверяем состояние на Investflow, открываем новые позиции, если нужно.
     Verbose("Запрашиваем позиции с сервера");
     char request[], response[];
     string requestHeaders = "User-Agent: investflow-tc", responseHeaders;
-    int rc = WebRequest("GET", "http://investflow.ru/api/get-tc-orders?mode=csv?symbol=" + activeInstrument, requestHeaders, 30 * 1000, request, response, responseHeaders);
+    int rc = WebRequest("GET", "http://investflow.ru/api/get-ts-orders?mode=csv?symbol=" + activeInstrument, requestHeaders, 30 * 1000, request, response, responseHeaders);
     if (rc < 0) {
         int err = GetLastError();
         Print("Ошибка при доступе к investflow. Код ошибки: ", ErrorDescription(err));
         return;
     }
+
     string csv = CharArrayToString(response, 0, WHOLE_ARRAY, CP_UTF8);
     string lines[];
     rc = StringSplit(csv, '\n', lines);
@@ -82,7 +84,7 @@ void OnTimer() {
         Verbose("Пустой ответ от investflow. Код ошибки: " + (string)GetLastError());
         return;
     }
-    if (StringCompare("order, symbol, account, order_type, open, sl, tp", lines[0]) != 0) {
+    if (StringCompare("order, symbol, account, order_type, open_price, sl_price, tp_price", lines[0]) != 0) {
         Print("Неподдерживаемый формат ответа: ", lines[0]);
         return;
     }
