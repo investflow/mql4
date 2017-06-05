@@ -70,7 +70,7 @@ void OnTimer() {
     Verbose("Запрашиваем позиции с сервера");
     char request[], response[];
     string requestHeaders = "User-Agent: investflow-tc", responseHeaders;
-    int rc = WebRequest("GET", "http://investflow.ru/api/get-ts-orders?mode=csv?symbol=" + activeInstrument, requestHeaders, 30 * 1000, request, response, responseHeaders);
+    int rc = WebRequest("GET", "http://investflow.ru/api/get-ts-orders?mode=csv&symbol=" + activeInstrument, requestHeaders, 30 * 1000, request, response, responseHeaders);
     if (rc < 0) {
         int err = GetLastError();
         Print("Ошибка при доступе к investflow. Код ошибки: ", ErrorDescription(err));
