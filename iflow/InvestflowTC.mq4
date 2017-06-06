@@ -48,6 +48,10 @@ int OnInit() {
    
     // раз в минуту будем проверять данные с Investflow.
     EventSetTimer(60);
+
+    // делаем первую проверку сразу же
+    OnTimer();
+
     return INIT_SUCCEEDED;
 }
 
@@ -107,7 +111,7 @@ void OnTimer() {
         }
         string tokens[];
         rc = StringSplit(line, ',', tokens);
-        if (rc != 9) {
+        if (rc != 7) {
             Print("Ошибка парсинга строки: ", line);
             break;
         }
