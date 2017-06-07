@@ -12,6 +12,7 @@
 
 // входные параметры:
 input string usersList = ""; // Имена участников для копирования через запятую
+input int verbose = 1; // Режим очень детального лога. Если не равен 0 - копировщик будет сообщать в лог о каждом шаге.
 input double lots = 0.1; // Объём сделки (лотность)
 input int minSL = 100; // Минимальный размер Stop Loss. Будет использован если SL выставленный трейдером ниже.
 input int maxSL = 200; // Максимальный размер Stop Loss. Будет использоваться если SL выставленный трейдером выше или его нет.
@@ -19,7 +20,6 @@ input int minTP = 100; // Минимальный разрем Take Profit. Бу�
 input int maxTP = 300; // Максимальный размер Take Profit. Будет использоваться если TP выставленный трейдером выше или его нет.
 input int slippage = 0; // Параметр slippage при открытии ордеров
 
-input int verbose = 0; // Режим очень детального лога. Если не равен 0 - копировщик будет сообщать в лог о каждом шаге.
 
 // Классический код торгуемого инструмента (например EURUSD), без специфики брокера (суффиксы, префиксы)
 string activeInstrument = "";
@@ -44,7 +44,7 @@ int OnInit() {
         return INIT_PARAMETERS_INCORRECT;
     }
 
-    Print("Инициализация завершена. Копируем: ", activeInstrument, " от " ,  usersList);
+    Print("Инициализация завершена. Копируем: ", activeInstrument, " от " ,  usersList, ", 1 пункт в единицах цены: ", 1.0 / MathPow(10, Digits()));
    
     // раз в минуту будем проверять данные с Investflow.
     EventSetTimer(60);
@@ -73,7 +73,8 @@ void OnTimer() {
     // проверяем состояние на Investflow, открываем новые позиции, если нужно.
     Verbose("Запрашиваем позиции с сервера");
     char request[], response[];
-    string requestHeaders = "User-Agent: investflow-tc", responseHeaders;
+    string requestHeaders = "User-Agent: investflow-tc";
+    string responseHeaders;
     int rc = WebRequest("GET", "http://investflow.ru/api/get-ts-orders?mode=csv&symbol=" + activeInstrument, requestHeaders, 30 * 1000, request, response, responseHeaders);
     if (rc < 0) {
         int err = GetLastError();
@@ -132,7 +133,11 @@ void OnTimer() {
         iflowActiveOrderIds[nActiveOrders] = iflowOrderId;
         nActiveOrders++;
 
-        int type = StringCompare("buy", orderType) == 0 ? OP_BUY : OP_SELL;
+        int type = StringCompare("buy", orderType) == 0 ? OP_BUY : StringCompare("sell", orderType) == 0 ? OP_SELL : -1;
+        if (type != OP_BUY && type != OP_SELL) {
+            Print("Ошибка парсинга типа ордера: ", line);
+            break;
+        }
         openOrderIfNeeded(iflowOrderId, account, type, openPrice, stopLossPrice, takeProfitPrice);
     }
 
@@ -203,32 +208,39 @@ int matchOrderById(int iflowOrderId) {
     если не открыт, проверяет не выполнены ли условия открытия
     и если условия выполнены - открывает ордер
 */
-void openOrderIfNeeded(int iflowOrderId, string masterAccount, int orderType, double openPrice, double stopLossPrice, double takeProfitPrice) {
+void openOrderIfNeeded(int iflowOrderId, string masterAccount, int orderType, double traderOpenPrice,
+                        double originalStopLossPrice, double originalTakeProfitPrice) {
     // проверим, не был ли уже обработан ордер
     bool processed = isOrderProcessed(iflowOrderId);
     if (processed) {
         Verbose("Позиция уже была скопирована: " + masterAccount + ", " + getIflowOrderIdCommentToken(iflowOrderId));
         return;
     }
+    Verbose("Обрабатываем позицию " + masterAccount + ", id: " + (string)iflowOrderId + ", тип: " + (orderType == OP_BUY ? "BUY" : "SELL")
+            + " открытие трейдера: " + (string)traderOpenPrice);
+
     // ордер еще не отработан: откроем его если текущие условия те же или лучше указанных трейдером
     bool isBuy = orderType == OP_BUY;
     double currentPrice = MarketInfo(Symbol(), isBuy ? MODE_ASK : MODE_BID);
 
     // выставляем ордер только если текущая ситуация на рынке не хуже, чем цена при которой открывался мастер
-    bool placeOrder  = openPrice <=0 || (isBuy ? openPrice <= currentPrice : openPrice >= currentPrice);
+    bool placeOrder  = traderOpenPrice > 0 && (isBuy ? currentPrice <= traderOpenPrice : currentPrice >= traderOpenPrice);
     if (!placeOrder) {
-        Verbose("Не выполнены условия открытия для "+ masterAccount);
+        Verbose("Не выполнены условия открытия для "+ masterAccount + ", текущая цена: " + (string)currentPrice);
         return;
     }
 
     string comment = masterAccount + ", " + getIflowOrderIdCommentToken(iflowOrderId);
+    double stopLossPrice = getEffectiveStopPrice(currentPrice, orderType, originalStopLossPrice, true);
+    double takeProfitPrice = getEffectiveStopPrice(currentPrice, orderType, originalTakeProfitPrice, false);
+
     Print("Копируем позицию " +  masterAccount + ", цена: " + (string)currentPrice +
         ", объём: " + (string)lots +
         ", тип: " + (isBuy ? "BUY" : "SELL") +
         ", SL: " + (string)stopLossPrice,
         ", TP: ", takeProfitPrice,
         ", iflow-код: ", iflowOrderId);
-   
+
     int ticket = OrderSend(Symbol(), orderType, lots, currentPrice, slippage, stopLossPrice, takeProfitPrice, comment, MAGIC);
     if (ticket == -1) {
         int err = GetLastError();
@@ -236,6 +248,28 @@ void openOrderIfNeeded(int iflowOrderId, string masterAccount, int orderType, do
     } else {
         Print("Позиция открыта, " + comment + ", Ордер: " + (string)ticket);
     }
+}
+
+double mid(double a, double b, double c) {
+    return a > b ?
+        (c > a ? a : (b > c ? b : c))
+        : (c > b ? b : (a > c ? a : c));
+}
+/*
+    Возвращает значение StopLoss/TakeProfit для текущего состояния цены.
+    Использует значения minSL(minTP) и maxSL(maxTP) заданные пользователем.
+*/
+double getEffectiveStopPrice(double currentPrice, int orderType, double originalStopPrice, bool isSL) {
+    double sign = isSL ? (orderType == OP_BUY ? -1 : 1) : (orderType == OP_BUY ? 1 : -1);
+    double minS = isSL ? minSL : minTP;
+    double maxS = isSL ? maxSL : maxTP;
+    double pointsToPriceMultiplier = 1 / MathPow(10, Digits());
+    double minStopPrice = currentPrice + sign * minS * pointsToPriceMultiplier;
+    double maxStopPrice = currentPrice + sign * maxS * pointsToPriceMultiplier;
+    if (originalStopPrice <= 0) {
+        return maxStopPrice;
+    }
+    return mid(minStopPrice, originalStopPrice, maxStopPrice);
 }
 
 /* Возвращает значение между min & max. При val <=0 возвращается max. */
