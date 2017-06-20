@@ -12,12 +12,12 @@
 
 // входные параметры:
 input string usersList = ""; // Имена участников для копирования через запятую
-input int verbose = 1; // Режим очень детального лога. Если не равен 0 - копировщик будет сообщать в лог о каждом шаге.
+input int verbose = 1; // Режим детального лога. Если не равен 0 - копировщик будет сообщать в лог о каждом шаге.
 input double lots = 0.1; // Объём сделки (лотность)
 input int minSL = 100; // Минимальный размер Stop Loss. Будет использован если SL выставленный трейдером ниже.
-input int maxSL = 200; // Максимальный размер Stop Loss. Будет использоваться если SL выставленный трейдером выше или его нет.
+input int maxSL = 1000; // Максимальный размер Stop Loss. Будет использоваться если SL выставленный трейдером выше или его нет.
 input int minTP = 100; // Минимальный разрем Take Profit. Будет использован если TP выставленный трейдером ниже.
-input int maxTP = 300; // Максимальный размер Take Profit. Будет использоваться если TP выставленный трейдером выше или его нет.
+input int maxTP = 1000; // Максимальный размер Take Profit. Будет использоваться если TP выставленный трейдером выше или его нет.
 input int slippage = 0; // Параметр slippage при открытии ордеров
 
 
@@ -31,8 +31,7 @@ const int MAGIC = 397687501;
 
 int OnInit() {
     if (StringLen(usersList) == 0 || StringSplit(usersList, ',', users) == 0) {
-        Print("Не указано имя пользователя для копирования!");
-        return INIT_PARAMETERS_INCORRECT;
+        Print("Не указано имя пользователя для копирования! Работаем в режиме закрытия позиций.");
     }
     if (lots <= 0 || lots > 10) {
         Print("Недопустимая лотность сделки!");
@@ -200,7 +199,7 @@ int matchOrderById(int iflowOrderId) {
     }
     string token = getIflowOrderIdCommentToken(iflowOrderId);
     // ответ 1 ("да") если iflowOrderId совпал, иначе 0 ("нет")
-    return StringFind(comment, token, 0) > 0 ? 1 : 0;
+    return StringFind(comment, token, 0) >= 0 ? 1 : 0;
 }
 
 /*
@@ -308,7 +307,13 @@ void closeOrdersNotInList(const int & iflowActiveOrderIds[], const int nIflowAct
     // ищем среди открытых ордеров
     for(int i = 0, nOrders = OrdersTotal(); i < nOrders; i++) {
         if (OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) {
-            if (OrderMagicNumber() != MAGIC || OrderSymbol() != Symbol()) {
+            if (OrderSymbol() != Symbol()) {
+                continue;
+            }
+            Verbose("Проверяем условия закрытия для позиции: " + OrderComment());
+            if (OrderMagicNumber() != MAGIC) {
+                Verbose("Позиция открыта не нами: " + (string)OrderTicket() + " magic: " + (string)OrderMagicNumber() +
+                        ", наш magic: " + (string)MAGIC);
                 continue; // позиция открыта не нами - игнорируем.
             }
             bool activeOnIflow = false;
@@ -320,6 +325,7 @@ void closeOrdersNotInList(const int & iflowActiveOrderIds[], const int nIflowAct
                 }
             }
             if (activeOnIflow) {
+                Verbose("Позиция найдена на Investflow и активна: " + OrderComment());
                 continue; // ордер найден на investflow и активен - ничего не делаем.
             }
             // закрываем ордер.
